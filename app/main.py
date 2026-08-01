@@ -18,7 +18,6 @@ def main():
 
     client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
 
-    # 首次调用，获取常规对话结果
     chat = client.chat.completions.create(
         model="anthropic/claude-haiku-4.5",
         messages=[{"role": "user", "content": args.p}],
@@ -27,10 +26,13 @@ def main():
     if not chat.choices or len(chat.choices) == 0:
         raise RuntimeError("no choices in response")
 
+    # 调试日志输出
     print("Logs from your program will appear here!", file=sys.stderr)
+
+    # 修正属性访问逻辑，通过下标取列表元素
     print(chat.choices.message.content)
 
-    # 传入Read工具的二次调用，补全缺失的列表闭合标记，同时修正返回值访问逻辑
+    # 完整补全tools数组的闭合标记，配置正确的Read工具定义
     chat = client.chat.completions.create(
         model="anthropic/claude-haiku-4.5",
         messages=[{"role": "user", "content": args.p}],
@@ -55,7 +57,7 @@ def main():
         ]
     )
 
-    # 新增二次调用结果的访问输出，补全代码逻辑
+    # 为二次接口调用补充结果校验和输出逻辑
     if not chat.choices or len(chat.choices) == 0:
         raise RuntimeError("no choices in tool call response")
     print(chat.choices.message.content)
