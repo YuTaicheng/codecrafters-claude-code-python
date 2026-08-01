@@ -60,8 +60,24 @@ def main():
                             "required": ["file_path", "content"],
                         },
                     }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "shell_exec",
+                        "description": "Execute a shell command",
+                        "parameters": {
+                            "type": "object",
+                            "required": ["command"],
+                            "properties": {
+                                "command": {
+                                    "type": "string",
+                                    "description": "The command to execute"
+                                }
+                            }
+                        }
+                    }
                 }
-
             ],
         )
 
@@ -117,6 +133,7 @@ def main():
                             "content": result,
                         }
                     )
-
+            if tc.function.name == 'shell_exec':
+                os.system(args_dict["command"])
 if __name__ == "__main__":
     main()
