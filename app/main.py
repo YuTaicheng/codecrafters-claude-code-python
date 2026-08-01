@@ -39,7 +39,29 @@ def main():
                             "required": ["file_path"],
                         },
                     },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "Write",
+                        "description": "Write content to a specified file, will overwrite existing content if the file already exists",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "file_path": {
+                                    "type": "string",
+                                    "description": "The path of the target file to write content to",
+                                },
+                                "content": {
+                                    "type": "string",
+                                    "description": "The content that needs to be written into the target file",
+                                }
+                            },
+                            "required": ["file_path", "content"],
+                        },
+                    }
                 }
+
             ],
         )
 
