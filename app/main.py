@@ -1,8 +1,18 @@
+
+
 import argparse
+import json
 import os
 import sys
+from typing import List
 
 from openai import OpenAI
+from openai.types.chat import (
+    ChatCompletionMessageParam,
+    ChatCompletionToolUnionParam,
+    ChatCompletionUserMessageParam,
+    ChatCompletionFunctionToolParam,
+)
 
 API_KEY = os.getenv("OPENROUTER_API_KEY")
 BASE_URL = os.getenv("OPENROUTER_BASE_URL", default="https://openrouter.ai/api/v1")
@@ -18,39 +28,47 @@ def main():
 
     client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
 
-    # 调试日志输出
-    print("Logs from your program will appear here!", file=sys.stderr)
+    user_message: ChatCompletionUserMessageParam = {"role": "user", "content": args.p}
 
-    # 直接发起携带Read工具定义的请求，模型将识别到当前有1个可用工具
+    messages: List[ChatCompletionMessageParam] = [user_message]
+
+    read_tool: ChatCompletionFunctionToolParam = {
+        "type": "function",
+        "function": {
+            "name": "Read",
+            "description": "Read and return the contents of a file",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "The path to the file to read",
+                    }
+                },
+                "required": ["file_path"],
+            },
+        },
+    }
+
+    tools: List[ChatCompletionToolUnionParam] = [read_tool]
+
     chat = client.chat.completions.create(
         model="anthropic/claude-haiku-4.5",
-        messages=[{"role": "user", "content": args.p}],
-        tools=[
-            {
-                "type": "function",
-                "function": {
-                    "name": "Read",
-                    "description": "Read and return the contents of a file",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "file_path": {
-                                "type": "string",
-                                "description": "The path to the file to read",
-                            }
-                        },
-                        "required": ["file_path"],
-                    },
-                },
-            }
-        ]
+        messages=messages,
+        tools=tools,
     )
 
     if not chat.choices or len(chat.choices) == 0:
         raise RuntimeError("no choices in response")
 
-    # 输出模型识别到工具数量后的正确返回结果
-    print(chat.choices[0].message.content)
+    if chat.choices[0].message.content:
+        print(chat.choices[0].message.content)
+
+    for tc in chat.choices[0].message.tool_calls or []:
+        args = json.loads(tc.function.arguments)
+        if tc.function.name == "Read":
+            with open(args["file_path"]) as f:
+                print(f.read())
 
 
 if __name__ == "__main__":
