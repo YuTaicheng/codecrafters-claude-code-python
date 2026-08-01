@@ -30,7 +30,7 @@ def main():
     print("Logs from your program will appear here!", file=sys.stderr)
 
     # 修正属性访问逻辑，通过下标取列表元素
-    print(chat.choices[0])
+    print(chat.choices[0].message)
 
     # 完整补全tools数组的闭合标记，配置正确的Read工具定义
     chat = client.chat.completions.create(
