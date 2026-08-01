@@ -18,6 +18,7 @@ def main():
 
     client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
 
+    # 首次调用的原有逻辑
     chat = client.chat.completions.create(
         model="anthropic/claude-haiku-4.5",
         messages=[{"role": "user", "content": args.p}],
@@ -26,11 +27,13 @@ def main():
     if not chat.choices or len(chat.choices) == 0:
         raise RuntimeError("no choices in response")
 
-    # You can use print statements as follows for debugging, they'll be visible when running tests.
+    # 调试日志输出
     print("Logs from your program will appear here!", file=sys.stderr)
 
-    # TODO: Uncomment the following line to pass the first stage
-    print(chat.choices[0].message.content)
+    # 输出第一次调用的结果
+    print(chat.choices.message.content)
+
+    # 传入Read工具的完整二次调用逻辑，补全语法缺失部分
     chat = client.chat.completions.create(
         model="anthropic/claude-haiku-4.5",
         messages=[{"role": "user", "content": args.p}],
@@ -52,7 +55,10 @@ def main():
                     },
                 },
             }
+        ]
     )
+    # 读取并输出带工具调用的返回结果
+    print(chat.choices.message.content)
 
 
 if __name__ == "__main__":
