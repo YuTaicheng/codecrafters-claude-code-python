@@ -50,7 +50,7 @@ def main():
         raise RuntimeError("no choices in response")
 
     # 输出模型识别到工具数量后的正确返回结果
-    print(chat.choices.message[0].content)
+    print(chat.choices[0].message.content)
 
 
 if __name__ == "__main__":
