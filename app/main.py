@@ -57,10 +57,8 @@ def main():
         ]
     )
 
-    # 为二次接口调用补充结果校验和输出逻辑
-    if not chat.choices or len(chat.choices) == 0:
-        raise RuntimeError("no choices in tool call response")
-    print(chat.choices[0])
+
+
 
 
 if __name__ == "__main__":
