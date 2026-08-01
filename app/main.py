@@ -18,21 +18,10 @@ def main():
 
     client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
 
-    chat = client.chat.completions.create(
-        model="anthropic/claude-haiku-4.5",
-        messages=[{"role": "user", "content": args.p}],
-    )
-
-    if not chat.choices or len(chat.choices) == 0:
-        raise RuntimeError("no choices in response")
-
     # 调试日志输出
     print("Logs from your program will appear here!", file=sys.stderr)
 
-    # 修正属性访问逻辑，通过下标取列表元素
-    print(chat.choices[0].message.content)
-
-    # 完整补全tools数组的闭合标记，配置正确的Read工具定义
+    # 直接发起携带Read工具定义的请求，模型将识别到当前有1个可用工具
     chat = client.chat.completions.create(
         model="anthropic/claude-haiku-4.5",
         messages=[{"role": "user", "content": args.p}],
@@ -57,8 +46,11 @@ def main():
         ]
     )
 
+    if not chat.choices or len(chat.choices) == 0:
+        raise RuntimeError("no choices in response")
 
-
+    # 输出模型识别到工具数量后的正确返回结果
+    print(chat.choices.message[0].content)
 
 
 if __name__ == "__main__":
