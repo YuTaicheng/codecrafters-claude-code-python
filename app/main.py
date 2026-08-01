@@ -81,6 +81,20 @@ def main():
                         }
                     )
 
+            if tc.function.name == 'Write':
+                with open(args_dict["file_path"], "w") as f:
+                    try:
+                        f.write(response_message.content)
+                        result = 'OK'
+                    except Exception as e:
+                        result = 'ERROR: {}'.format(e)
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": result,
+                        }
+                    )
 
 if __name__ == "__main__":
     main()
