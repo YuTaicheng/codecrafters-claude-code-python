@@ -106,10 +106,10 @@ def main():
             if tc.function.name == 'Write':
                 with open(args_dict["file_path"], "w") as f:
                     try:
-                        f.write(response_message.content)
-                        result = 'OK'
+                        f.write(args_dict["content"])
+                        result = '$2+OK'
                     except Exception as e:
-                        result = 'ERROR: {}'.format(e)
+                        result = '-ERROR: {}'.format(e)
                     messages.append(
                         {
                             "role": "tool",
