@@ -2,10 +2,14 @@ import argparse
 import os
 import json
 from openai import OpenAI
+import subprocess
 
 API_KEY = os.getenv("OPENROUTER_API_KEY")
 BASE_URL = os.getenv("OPENROUTER_BASE_URL", default="https://openrouter.ai/api/v1")
 
+def bash(command: str) -> str:
+    result = subprocess.run(command, shell=True, capture_output=True, text=True)
+    return result.stdout if result.stdout else result.stderr
 
 def main():
     p = argparse.ArgumentParser()
@@ -64,7 +68,7 @@ def main():
                 {
                     "type": "function",
                     "function": {
-                        "name": "shell_exec",
+                        "name": "Bash",
                         "description": "Execute a shell command",
                         "parameters": {
                             "type": "object",
@@ -133,7 +137,15 @@ def main():
                             "content": result,
                         }
                     )
-            if tc.function.name == 'shell_exec':
-                os.system(args_dict["command"])
+            if tc.function.name == 'Bash':
+               result = bash(args_dict["command"])
+               messages.append(
+                   {
+                       "role": "tool",
+                       "tool_call_id": tc.id,
+                       "content": result,
+                   }
+               )
+
 if __name__ == "__main__":
     main()
