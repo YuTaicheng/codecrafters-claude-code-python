@@ -50,6 +50,7 @@ def main():
 
     client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
     messages = []
+    skills_ad = build_skills_prompt()
     messages.append({"role": "system", "content": skills_ad})
     messages.append({"role": "user", "content": args.p})
 
