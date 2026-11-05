@@ -3,10 +3,39 @@ import os
 import json
 from openai import OpenAI
 import subprocess
+import yamlium
+from dataclasses import dataclass
 
+
+@dataclass(frozen=True)
+class Skill:
+    name: str
+    description: str
+    body: str
+    @classmethod
+    def from_file(cls, path: str) -> "Skill":
+        with open(path, encoding="utf-8") as f:
+            meta, body = yamlium.read_markdown(f.read())
+            if not meta or not isinstance(meta.get("name"), str) or not isinstance(meta.get("description"), str):
+                raise ValueError(f"{path}: 缺少 name/description")
+            return cls(meta["name"], meta["description"], body.lstrip("\n"))
 API_KEY = os.getenv("OPENROUTER_API_KEY")
 BASE_URL = os.getenv("OPENROUTER_BASE_URL", default="https://openrouter.ai/api/v1")
-
+def build_skills_prompt() -> str:
+    skills =[]
+    for entry in sorted(os.listdir(root)):
+        folder = os.path.join(root, entry)
+        if not os.path.isdir(folder):
+            continue
+        skill_file = os.path.join(folder, "SKILL.md")
+        if os.path.isfile(skill_file):
+            skills.append(Skill.from_file(skill_file))
+        if skills:
+            lines = [f"- {s.name}: {s.description}" for s in skills]
+            system = "You have access to the following skills:\n" + "\n".join(lines)
+        else:
+            system = "You have no additional skills available."
+        return system
 def bash(command: str) -> str:
     result = subprocess.run(command, shell=True, capture_output=True, text=True)
     return result.stdout if result.stdout else result.stderr
@@ -20,7 +49,9 @@ def main():
         raise RuntimeError("OPENROUTER_API_KEY is not set")
 
     client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
-    messages = [{"role": "user", "content": args.p}]
+    messages = []
+    messages.append({"role": "system", "content": skills_ad})
+    messages.append({"role": "user", "content": args.p})
 
     while True:
         chat = client.chat.completions.create(
