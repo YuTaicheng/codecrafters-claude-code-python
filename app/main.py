@@ -19,6 +19,7 @@ class Skill:
         with open(path, encoding="utf-8") as f:
             content = f.read()
             
+
         meta, body = yamlium.read_markdown(content)
         
         if not meta:
@@ -72,7 +73,7 @@ def build_skills_prompt(root: str = ".claude/skills") -> str:
     return system
 
 def build_user_prompt(raw_input:str):
-    if not raw_input.startwith("/"):
+    if not raw_input.startswith("/"):
         return raw_input
     parts = raw_input.split(" ", 1)
     skill_name = parts[0][1:]  # 去掉 '/'
