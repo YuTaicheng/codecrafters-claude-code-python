@@ -1,6 +1,7 @@
 import argparse
 import os
 import json
+import sys
 from openai import OpenAI
 import subprocess
 import yamlium
@@ -16,10 +17,25 @@ class Skill:
     @classmethod
     def from_file(cls, path: str) -> "Skill":
         with open(path, encoding="utf-8") as f:
-            meta, body = yamlium.read_markdown(f.read())
-            if not meta or not isinstance(meta.get("name"), str) or not isinstance(meta.get("description"), str):
-                raise ValueError(f"{path}: 缺少 name/description")
-            return cls(meta["name"], meta["description"], body.lstrip("\n"))
+            content = f.read()
+            
+        meta, body = yamlium.read_markdown(content)
+        
+        if not meta:
+            raise ValueError("yamlium 返回的 meta 为空")
+            
+        # 强制使用 dict() 和 str()，防止 yamlium 返回自定义的 Object
+        try:
+            meta_dict = dict(meta)
+            name = str(meta_dict.get("name", "")).strip()
+            desc = str(meta_dict.get("description", "")).strip()
+        except Exception as e:
+            raise ValueError(f"强制转换 meta 失败: {e}")
+            
+        if not name or not desc:
+            raise ValueError(f"缺少 name 或 description (实际解析: {meta})")
+            
+        return cls(name, desc, body.lstrip("\n"))
 
 
 API_KEY = os.getenv("OPENROUTER_API_KEY")
@@ -29,6 +45,7 @@ BASE_URL = os.getenv("OPENROUTER_BASE_URL", default="https://openrouter.ai/api/v
 def build_skills_prompt(root: str = ".claude/skills") -> str:
     skills = []
     if not os.path.isdir(root):
+        print(f"DEBUG: {root} does not exist!", file=sys.stderr)
         return "You have no additional skills available."
         
     for entry in sorted(os.listdir(root)):
@@ -39,7 +56,9 @@ def build_skills_prompt(root: str = ".claude/skills") -> str:
         if os.path.isfile(skill_file):
             try:
                 skills.append(Skill.from_file(skill_file))
-            except Exception:
+            except Exception as e:
+                # 把跳过的原因打印到 stderr，方便我们排查
+                print(f"⚠️ Skipping invalid skill {skill_file}: {e}", file=sys.stderr)
                 continue
                 
     if skills:
@@ -48,6 +67,8 @@ def build_skills_prompt(root: str = ".claude/skills") -> str:
     else:
         system = "You have no additional skills available."
         
+    # 打印最终生成的 system prompt 到 stderr 确认
+    print(f"DEBUG System Prompt:\n{system}", file=sys.stderr)
     return system
 
 
