@@ -77,7 +77,8 @@ def build_user_prompt(raw_input:str):
         return raw_input
     parts = raw_input.split(" ", 1)
     skill_name = parts[0][1:]  # 去掉 '/'
-    extra_args = parts[1] if len(parts) > 1 else ""
+    raw_args = parts[1].strip() if len(parts) > 1 else ""
+    args_list = raw_args.split() if raw_args else ""
     skill_path = os.path.join(".claude/skills", skill_name, "SKILL.md")
     try:
         skill = Skill.from_file(skill_path)
