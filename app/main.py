@@ -2,11 +2,11 @@ import argparse
 import os
 import json
 import sys
-from openai import OpenAI
+import re
 import subprocess
 import yamlium
-import re
 from dataclasses import dataclass
+from openai import OpenAI
 
 
 @dataclass(frozen=True)
@@ -18,26 +18,10 @@ class Skill:
     @classmethod
     def from_file(cls, path: str) -> "Skill":
         with open(path, encoding="utf-8") as f:
-            content = f.read()
-            
-
-        meta, body = yamlium.read_markdown(content)
-        
-        if not meta:
-            raise ValueError("yamlium 返回的 meta 为空")
-            
-        # 强制使用 dict() 和 str()，防止 yamlium 返回自定义的 Object
-        try:
-            meta_dict = dict(meta)
-            name = str(meta_dict.get("name", "")).strip()
-            desc = str(meta_dict.get("description", "")).strip()
-        except Exception as e:
-            raise ValueError(f"强制转换 meta 失败: {e}")
-            
-        if not name or not desc:
-            raise ValueError(f"缺少 name 或 description (实际解析: {meta})")
-            
-        return cls(name, desc, body.lstrip("\n"))
+            meta, body = yamlium.read_markdown(f.read())
+            if not meta or not isinstance(meta.get("name"), str) or not isinstance(meta.get("description"), str):
+                raise ValueError(f"{path}: 缺少 name/description")
+            return cls(meta["name"], meta["description"], body.lstrip("\n"))
 
 
 API_KEY = os.getenv("OPENROUTER_API_KEY")
@@ -47,7 +31,6 @@ BASE_URL = os.getenv("OPENROUTER_BASE_URL", default="https://openrouter.ai/api/v
 def build_skills_prompt(root: str = ".claude/skills") -> str:
     skills = []
     if not os.path.isdir(root):
-        print(f"DEBUG: {root} does not exist!", file=sys.stderr)
         return "You have no additional skills available."
         
     for entry in sorted(os.listdir(root)):
@@ -58,39 +41,54 @@ def build_skills_prompt(root: str = ".claude/skills") -> str:
         if os.path.isfile(skill_file):
             try:
                 skills.append(Skill.from_file(skill_file))
-            except Exception as e:
-                # 把跳过的原因打印到 stderr，方便我们排查
-                print(f"⚠️ Skipping invalid skill {skill_file}: {e}", file=sys.stderr)
+            except Exception:
                 continue
                 
     if skills:
         lines = [f"- {s.name}: {s.description}" for s in skills]
-        system = "You have access to the following skills:\n" + "\n".join(lines)
-    else:
-        system = "You have no additional skills available."
-        
-    # 打印最终生成的 system prompt 到 stderr 确认
-    print(f"DEBUG System Prompt:\n{system}", file=sys.stderr)
-    return system
+        return "You have access to the following skills:\n" + "\n".join(lines)
+    return "You have no additional skills available."
 
-def build_user_prompt(raw_input:str):
+
+def build_user_prompts(raw_input: str) -> list[str]:
     if not raw_input.startswith("/"):
-        return raw_input
-    parts = raw_input.split(" ", 1)
-    skill_name = parts[0][1:]  # 去掉 '/'
-    raw_args = parts[1].strip() if len(parts) > 1 else ""
-    args_list = raw_args.split() if raw_args else ""
-    skill_path = os.path.join(".claude/skills", skill_name, "SKILL.md")
-    try:
-        skill = Skill.from_file(skill_path)
-        injected = skill.body
-        env = {"$ARGUMENTS": raw_args}
-        for i, arg in enumerate(args_list):
-            env[f"${i}"] = env[f"$ARGUMENTS[{i}]"] = arg
-        return re.sub(r'\$(?:ARGUMENTS(?:\[\d+\])?|\d+)', lambda m: env.get(m.group(), ""), injected)
-    except Exception as e:
-        print(f"DEBUG: parse error {e}", file=sys.stderr)
-        return raw_input
+        return [raw_input]
+
+    tokens = raw_input.split()
+    skill_names = []
+    arg_idx = len(tokens)
+
+    for i, token in enumerate(tokens):
+        if token.startswith("/"):
+            skill_name = token[1:]
+            if os.path.isfile(os.path.join(".claude/skills", skill_name, "SKILL.md")):
+                skill_names.append(skill_name)
+                continue
+        arg_idx = i
+        break
+
+    if not skill_names:
+        return [raw_input]
+
+    raw_args = " ".join(tokens[arg_idx:])
+    args_list = raw_args.split()
+    results = []
+
+    for name in skill_names:
+        try:
+            body = Skill.from_file(os.path.join(".claude/skills", name, "SKILL.md")).body
+            env = {"$ARGUMENTS": raw_args}
+            for i, arg in enumerate(args_list):
+                env[f"${i}"] = env[f"$ARGUMENTS[{i}]"] = arg
+            
+            injected = re.sub(r'\$(?:ARGUMENTS(?:\[\d+\])?|\d+)', lambda m: env.get(m.group(), ""), body)
+            results.append(injected)
+        except Exception:
+            pass
+            
+    return results if results else [raw_input]
+
+
 def bash(command: str) -> str:
     try:
         result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=30)
@@ -112,10 +110,10 @@ def main():
     client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
     
     skills_ad = build_skills_prompt()
-    messages = [
-        {"role": "system", "content": skills_ad},
-        {"role": "user", "content": build_user_prompt(args.p)}
-    ]
+    messages = [{"role": "system", "content": skills_ad}]
+    
+    for prompt in build_user_prompts(args.p):
+        messages.append({"role": "user", "content": prompt})
 
     tools = [
         {
