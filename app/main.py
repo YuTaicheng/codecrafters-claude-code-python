@@ -71,7 +71,22 @@ def build_skills_prompt(root: str = ".claude/skills") -> str:
     print(f"DEBUG System Prompt:\n{system}", file=sys.stderr)
     return system
 
-
+def build_user_prompt(raw_input:str):
+    if not raw_input.startwith("/"):
+        return raw_input
+    parts = raw_input.split(" ", 1)
+    skill_name = parts[0][1:]  # 去掉 '/'
+    extra_args = parts[1] if len(parts) > 1 else ""
+    skill_path = os.path.join(".claude/skills", skill_name, "SKILL.md")
+    try:
+        skill = Skill.from_file(skill_path)
+        injected = skill.body
+        if extra_args:
+            injected += f"\n\n{extra_args}"
+        return injected
+    except Exception as e:
+        print(f"DEBUG: parse error {e}", file=sys.stderr)
+        return raw_input
 def bash(command: str) -> str:
     try:
         result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=30)
@@ -95,7 +110,7 @@ def main():
     skills_ad = build_skills_prompt()
     messages = [
         {"role": "system", "content": skills_ad},
-        {"role": "user", "content": args.p}
+        {"role": "user", "content": build_user_prompt(args.p)}
     ]
 
     tools = [
