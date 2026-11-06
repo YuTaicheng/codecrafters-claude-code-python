@@ -19,9 +19,21 @@ class Skill:
     def from_file(cls, path: str) -> "Skill":
         with open(path, encoding="utf-8") as f:
             meta, body = yamlium.read_markdown(f.read())
-            if not meta or not isinstance(meta.get("name"), str) or not isinstance(meta.get("description"), str):
+            if not meta:
+                raise ValueError(f"{path}: meta 为空")
+            
+            # 强制转换，兼容 yamlium 各种奇葩返回类型
+            try:
+                meta_dict = dict(meta)
+                name = str(meta_dict.get("name", "")).strip()
+                desc = str(meta_dict.get("description", "")).strip()
+            except Exception as e:
+                raise ValueError(f"{path}: 转换 meta 失败 {e}")
+                
+            if not name or not desc:
                 raise ValueError(f"{path}: 缺少 name/description")
-            return cls(meta["name"], meta["description"], body.lstrip("\n"))
+                
+            return cls(name, desc, body.lstrip("\n"))
 
 
 API_KEY = os.getenv("OPENROUTER_API_KEY")
