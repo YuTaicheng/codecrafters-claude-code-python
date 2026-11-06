@@ -29,7 +29,10 @@ def build_skills_prompt(root: str = ".claude/skills") -> str:
             continue
         skill_file = os.path.join(folder, "SKILL.md")
         if os.path.isfile(skill_file):
-            skills.append(Skill.from_file(skill_file))
+            try:
+                skills.append(Skill.from_file(skill_file))
+            except:
+                continue
         if skills:
             lines = [f"- {s.name}: {s.description}" for s in skills]
             system = "You have access to the following skills:\n" + "\n".join(lines)
