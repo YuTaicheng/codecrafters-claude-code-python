@@ -82,9 +82,10 @@ def build_user_prompt(raw_input:str):
     try:
         skill = Skill.from_file(skill_path)
         injected = skill.body
-        if extra_args:
-            injected += f"\n\n{extra_args}"
-        return injected
+        env = {"$ARGUMENTS": raw_args}
+        for i, arg in enumerate(args_list):
+            env[f"${i}"] = env[f"$ARGUMENTS[{i}]"] = arg
+        return re.sub(r'\$(?:ARGUMENTS(?:\[\d+\])?|\d+)', lambda m: env.get(m.group(), "", body))
     except Exception as e:
         print(f"DEBUG: parse error {e}", file=sys.stderr)
         return raw_input
