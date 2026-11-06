@@ -84,7 +84,7 @@ def build_user_prompts(raw_input: str) -> list[str]:
             injected = re.sub(r'\$(?:ARGUMENTS(?:\[\d+\])?|\d+)', lambda m: env.get(m.group(), ""), body)
             results.append(injected)
         except Exception:
-            pass
+            print(f"DEBUG: parse error in {name} -> {e}", file=sys.stderr)
             
     return results if results else [raw_input]
 
