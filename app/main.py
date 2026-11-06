@@ -87,7 +87,7 @@ def build_user_prompt(raw_input:str):
         env = {"$ARGUMENTS": raw_args}
         for i, arg in enumerate(args_list):
             env[f"${i}"] = env[f"$ARGUMENTS[{i}]"] = arg
-        return re.sub(r'\$(?:ARGUMENTS(?:\[\d+\])?|\d+)', lambda m: env.get(m.group(), "", injected))
+        return re.sub(r'\$(?:ARGUMENTS(?:\[\d+\])?|\d+)', lambda m: env.get(m.group(), ""), injected)')
     except Exception as e:
         print(f"DEBUG: parse error {e}", file=sys.stderr)
         return raw_input
