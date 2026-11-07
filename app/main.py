@@ -14,7 +14,8 @@ class Skill:
     name: str
     description: str
     body: str
-    path:str
+    path: str
+
     @classmethod
     def from_file(cls, path: str) -> "Skill":
         with open(path, encoding="utf-8") as f:
@@ -22,7 +23,6 @@ class Skill:
             if not meta:
                 raise ValueError(f"{path}: meta 为空")
             
-            # 强制转换，兼容 yamlium 各种奇葩返回类型
             try:
                 meta_dict = dict(meta)
                 name = str(meta_dict.get("name", "")).strip()
@@ -33,7 +33,7 @@ class Skill:
             if not name or not desc:
                 raise ValueError(f"{path}: 缺少 name/description")
                 
-            return cls(name, desc, body.lstrip("\n"),os.path.dirname(path))
+            return cls(name, desc, body.lstrip("\n"), os.path.dirname(path))
 
 
 API_KEY = os.getenv("OPENROUTER_API_KEY")
@@ -93,7 +93,9 @@ def build_user_prompts(raw_input: str) -> list[str]:
             for i, arg in enumerate(args_list):
                 env[f"${i}"] = env[f"$ARGUMENTS[{i}]"] = arg
             
-            injected = re.sub(r'\$(?:ARGUMENTS(?:\[\d+\])?|\d+)', lambda m: env.get(m.group(), ""), body)
+            processed_body = re.sub(r'\$(?:ARGUMENTS(?:\[\d+\])?|\d+)', lambda m: env.get(m.group(), ""), body)
+            header = f"Skill: {name} (located at .claude/skills/{name})\nPaths in the instructions below are relative to that folder."
+            injected = f"{header}\n\n{processed_body}"
             results.append(injected)
         except Exception as e:
             print(f"DEBUG: parse error in {name} -> {e}", file=sys.stderr)
@@ -170,6 +172,21 @@ def main():
                     }
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "Skill",
+                "description": "Load a skill's instructions into the conversation",
+                "parameters": {
+                    "type": "object",
+                    "required": ["name"],
+                    "properties": {
+                        "name": {"type": "string", "description": "The name of the skill to use"},
+                        "args": {"type": "string", "description": "Optional arguments for the skill"}
+                    }
+                }
+            }
         }
     ]
 
@@ -223,6 +240,12 @@ def main():
                     result = "OK"
                 elif tc.function.name == "Bash":
                     result = bash(args_dict["command"])
+                elif tc.function.name == "Skill":
+                    name = args_dict["name"]
+                    try:
+                        skill = Skill.frm_file(os.path.join(".claude/skills", skill_name, "SKILL.md"))
+                    except Exception as e:
+                        return f"Error: Failed to load skill '{skill_name}'. Detail: {e}"
                 else:
                     result = f"Error: Unknown tool {tc.function.name}"
             except Exception as e:
