@@ -14,7 +14,7 @@ class Skill:
     name: str
     description: str
     body: str
-
+    path:str
     @classmethod
     def from_file(cls, path: str) -> "Skill":
         with open(path, encoding="utf-8") as f:
@@ -33,7 +33,7 @@ class Skill:
             if not name or not desc:
                 raise ValueError(f"{path}: 缺少 name/description")
                 
-            return cls(name, desc, body.lstrip("\n"))
+            return cls(name, desc, body.lstrip("\n"),os.path.dirname(path))
 
 
 API_KEY = os.getenv("OPENROUTER_API_KEY")
