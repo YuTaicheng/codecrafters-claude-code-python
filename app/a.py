@@ -59,7 +59,6 @@ def build_skills_prompt(root: str = ".claude/skills") -> str:
     if skills:
         lines = [f"- {s.name}: {s.description}" for s in skills]
         base = "You have access to the following skills:\n" + "\n".join(lines)
-        # 关键：告诉模型可以主动调用 Skill 工具
         base += "\n\nIf a skill matches the user's request, call the Skill tool with its name and follow the instructions it returns."
         return base
     return "You have no additional skills available."
