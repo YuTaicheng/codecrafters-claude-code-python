@@ -8,6 +8,9 @@ import yamlium
 from dataclasses import dataclass
 from openai import OpenAI
 
+# 导入题目提供的 LSP 客户端
+from lsp_client import LSPClient
+
 
 @dataclass(frozen=True)
 class Skill:
@@ -28,7 +31,7 @@ class Skill:
                 meta_dict = dict(meta)
                 name = str(meta_dict.get("name", "")).strip()
                 desc = str(meta_dict.get("description", "")).strip()
-                ctx = str(meta_dict.get("context", "")).strip()  # 新增：解析 context 字段
+                ctx = str(meta_dict.get("context", "")).strip()
             except Exception as e:
                 raise ValueError(f"{path}: 转换 meta 失败 {e}")
                 
@@ -125,6 +128,11 @@ def main():
     if not API_KEY:
         raise RuntimeError("OPENROUTER_API_KEY is not set")
 
+    # 1. 初始化 LSP 客户端
+    lsp_client = LSPClient.from_environment()
+    if lsp_client:
+        print("LSP client connected", file=sys.stderr)
+
     client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
     
     skills_ad = build_skills_prompt()
@@ -133,7 +141,7 @@ def main():
     for prompt in build_user_prompts(args.p):
         messages.append({"role": "user", "content": prompt})
 
-    # 把 tools 提取出来，方便子代理复用
+    # 基础工具定义
     tools = [
         {
             "type": "function",
@@ -195,6 +203,40 @@ def main():
         }
     ]
 
+    # 2. 如果 LSP 已连接，广告 LSP 工具
+    if lsp_client:
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": "LSP",
+                "description": "Returns the file, line, and character where a symbol is defined.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "operation": {
+                            "type": "string",
+                            "enum": ["goToDefinition"]
+                        },
+                        "filePath": {
+                            "type": "string",
+                            "description": "Absolute path, or a path relative to the agent's current working directory."
+                        },
+                        "line": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "1-based line number of the symbol."
+                        },
+                        "character": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "1-based character offset in UTF-16 code units (same as character count for ASCII)."
+                        }
+                    },
+                    "required": ["operation", "filePath", "line", "character"]
+                }
+            }
+        })
+
     while True:
         chat = client.chat.completions.create(
             model="anthropic/claude-haiku-4.5",
@@ -247,7 +289,6 @@ def main():
                     result = bash(args_dict["command"])
                 elif tc.function.name == "Skill":
                     skill_name = str(args_dict.get("name", "")).strip()
-                    
                     if not skill_name:
                         result = "Error: Missing or empty 'name' parameter."
                     else:
@@ -255,9 +296,7 @@ def main():
                             skill_path = os.path.join(".claude/skills", skill_name, "SKILL.md")
                             if os.path.isfile(skill_path):
                                 skill = Skill.from_file(skill_path)
-                                
                                 if skill.context == "fork":
-                                    # 🚀 子代理内联循环
                                     sub_messages = [{"role": "user", "content": skill.body}]
                                     while True:
                                         sub_chat = client.chat.completions.create(
@@ -266,7 +305,6 @@ def main():
                                             tools=tools,
                                         )
                                         sub_resp = sub_chat.choices[0].message
-                                        
                                         sub_msg_dict = {"role": "assistant", "content": sub_resp.content or ""}
                                         if sub_resp.tool_calls:
                                             sub_msg_dict["tool_calls"] = [
@@ -279,7 +317,6 @@ def main():
                                             result = sub_resp.content
                                             break
                                             
-                                        # 处理子代理的工具调用
                                         for stc in sub_resp.tool_calls:
                                             sub_result = ""
                                             try:
@@ -299,12 +336,14 @@ def main():
                                                 sub_result = f"Error executing tool: {e}"
                                             sub_messages.append({"role": "tool", "tool_call_id": stc.id, "content": sub_result})
                                 else:
-                                    # 普通技能，直接返回正文
                                     result = skill.body
                             else:
                                 result = f"Error: Skill '{skill_name}' does not exist on disk."
                         except Exception as e:
                             result = f"Error: Failed to load skill '{skill_name}'. Detail: {e}"
+                elif tc.function.name == "LSP":
+                    # 3. 占位符返回
+                    result = "LSP is not implemented yet"
                 else:
                     result = f"Error: Unknown tool {tc.function.name}"
             except Exception as e:
