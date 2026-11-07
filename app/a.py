@@ -243,14 +243,17 @@ def main():
                 elif tc.function.name == "Bash":
                     result = bash(args_dict["command"])
                 elif tc.function.name == "Skill":
-                    skill_name = args_dict.get("name")
+                    skill_name = str(args_dict.get("name", "")).strip()
                     if not skill_name:
-                        result = "Error: Missing 'name' parameter."
+                        result = "Error: Missing or empty 'name' parameter."
                     else:
                         try:
                             skill_path = os.path.join(".claude/skills", skill_name, "SKILL.md")
-                            skill = Skill.from_file(skill_path)
-                            result = skill.body
+                            if os.path.isfile(skill_path):
+                                skill = Skill.from_file(skill_path)
+                                result = skill.body
+                            else:
+                                result = f"Error: Skill '{skill_name}' does not exist on disk."
                         except Exception as e:
                             result = f"Error: Failed to load skill '{skill_name}'. Detail: {e}"
                 else:
