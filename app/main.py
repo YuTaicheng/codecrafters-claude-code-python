@@ -58,7 +58,9 @@ def build_skills_prompt(root: str = ".claude/skills") -> str:
                 
     if skills:
         lines = [f"- {s.name}: {s.description}" for s in skills]
-        return "You have access to the following skills:\n" + "\n".join(lines)
+        base = "You have access to the following skills:\n" + "\n".join(lines)
+        base += "\n\nIf a skill matches the user's request, call the Skill tool with its name and follow the instructions it returns."
+        return base
     return "You have no additional skills available."
 
 
@@ -229,6 +231,9 @@ def main():
         for tc in response.tool_calls:
             result = ""
             try:
+                # 照妖镜 1：打印大模型给的原始 JSON 参数
+                print(f"DEBUG: Raw arguments from model -> {tc.function.arguments}", file=sys.stderr)
+                
                 args_dict = json.loads(tc.function.arguments)
                 
                 if tc.function.name == "Read":
@@ -241,11 +246,28 @@ def main():
                 elif tc.function.name == "Bash":
                     result = bash(args_dict["command"])
                 elif tc.function.name == "Skill":
-                    name = args_dict["name"]
-                    try:
-                        skill = Skill.frm_file(os.path.join(".claude/skills", skill_name, "SKILL.md"))
-                    except Exception as e:
-                        return f"Error: Failed to load skill '{skill_name}'. Detail: {e}"
+                    skill_name = str(args_dict.get("name", "")).strip()
+                    
+                    # 照妖镜 2：打印被清理后的 name 和最终拼出来的路径
+                    print(f"DEBUG: Cleaned skill_name -> '{skill_name}'", file=sys.stderr)
+                    
+                    if not skill_name:
+                        result = "Error: Missing or empty 'name' parameter."
+                    else:
+                        try:
+                            skill_path = os.path.join(".claude/skills", skill_name, "SKILL.md")
+                            print(f"DEBUG: Attempting to load -> {skill_path}", file=sys.stderr)
+                            
+                            if os.path.isfile(skill_path):
+                                skill = Skill.from_file(skill_path)
+                                result = skill.body
+                                # 照妖镜 3：如果成功了，也打印一下正文前30个字符
+                                print(f"DEBUG: Loaded body -> {result[:30]}...", file=sys.stderr)
+                            else:
+                                print(f"DEBUG: 404 not found -> {skill_path}", file=sys.stderr)
+                                result = f"Error: Skill '{skill_name}' does not exist on disk."
+                        except Exception as e:
+                            result = f"Error: Failed to load skill '{skill_name}'. Detail: {e}"
                 else:
                     result = f"Error: Unknown tool {tc.function.name}"
             except Exception as e:
