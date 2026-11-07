@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from openai import OpenAI
 
 # 导入题目提供的 LSP 客户端
-from lsp_client import LSPClient
+from app.lsp_client import LSPClient
 
 
 @dataclass(frozen=True)
