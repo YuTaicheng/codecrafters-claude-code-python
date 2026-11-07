@@ -15,6 +15,7 @@ class Skill:
     description: str
     body: str
     path: str
+    context: str = ""
 
     @classmethod
     def from_file(cls, path: str) -> "Skill":
@@ -27,13 +28,14 @@ class Skill:
                 meta_dict = dict(meta)
                 name = str(meta_dict.get("name", "")).strip()
                 desc = str(meta_dict.get("description", "")).strip()
+                ctx = str(meta_dict.get("context", "")).strip()  # 新增：解析 context 字段
             except Exception as e:
                 raise ValueError(f"{path}: 转换 meta 失败 {e}")
                 
             if not name or not desc:
                 raise ValueError(f"{path}: 缺少 name/description")
                 
-            return cls(name, desc, body.lstrip("\n"), os.path.dirname(path))
+            return cls(name, desc, body.lstrip("\n"), os.path.dirname(path), ctx)
 
 
 API_KEY = os.getenv("OPENROUTER_API_KEY")
@@ -131,6 +133,7 @@ def main():
     for prompt in build_user_prompts(args.p):
         messages.append({"role": "user", "content": prompt})
 
+    # 把 tools 提取出来，方便子代理复用
     tools = [
         {
             "type": "function",
@@ -231,9 +234,6 @@ def main():
         for tc in response.tool_calls:
             result = ""
             try:
-                # 照妖镜 1：打印大模型给的原始 JSON 参数
-                print(f"DEBUG: Raw arguments from model -> {tc.function.arguments}", file=sys.stderr)
-                
                 args_dict = json.loads(tc.function.arguments)
                 
                 if tc.function.name == "Read":
@@ -248,23 +248,60 @@ def main():
                 elif tc.function.name == "Skill":
                     skill_name = str(args_dict.get("name", "")).strip()
                     
-                    # 照妖镜 2：打印被清理后的 name 和最终拼出来的路径
-                    print(f"DEBUG: Cleaned skill_name -> '{skill_name}'", file=sys.stderr)
-                    
                     if not skill_name:
                         result = "Error: Missing or empty 'name' parameter."
                     else:
                         try:
                             skill_path = os.path.join(".claude/skills", skill_name, "SKILL.md")
-                            print(f"DEBUG: Attempting to load -> {skill_path}", file=sys.stderr)
-                            
                             if os.path.isfile(skill_path):
                                 skill = Skill.from_file(skill_path)
-                                result = skill.body
-                                # 照妖镜 3：如果成功了，也打印一下正文前30个字符
-                                print(f"DEBUG: Loaded body -> {result[:30]}...", file=sys.stderr)
+                                
+                                if skill.context == "fork":
+                                    # 🚀 子代理内联循环
+                                    sub_messages = [{"role": "user", "content": skill.body}]
+                                    while True:
+                                        sub_chat = client.chat.completions.create(
+                                            model="anthropic/claude-haiku-4.5",
+                                            messages=sub_messages,
+                                            tools=tools,
+                                        )
+                                        sub_resp = sub_chat.choices[0].message
+                                        
+                                        sub_msg_dict = {"role": "assistant", "content": sub_resp.content or ""}
+                                        if sub_resp.tool_calls:
+                                            sub_msg_dict["tool_calls"] = [
+                                                {"id": stc.id, "type": stc.type, "function": {"name": stc.function.name, "arguments": stc.function.arguments}}
+                                                for stc in sub_resp.tool_calls
+                                            ]
+                                        sub_messages.append(sub_msg_dict)
+                                        
+                                        if not sub_resp.tool_calls:
+                                            result = sub_resp.content
+                                            break
+                                            
+                                        # 处理子代理的工具调用
+                                        for stc in sub_resp.tool_calls:
+                                            sub_result = ""
+                                            try:
+                                                sub_args = json.loads(stc.function.arguments)
+                                                if stc.function.name == "Read":
+                                                    with open(sub_args["file_path"], "r", encoding="utf-8") as f:
+                                                        sub_result = f.read()
+                                                elif stc.function.name == "Write":
+                                                    with open(sub_args["file_path"], "w", encoding="utf-8") as f:
+                                                        f.write(sub_args["content"])
+                                                    sub_result = "OK"
+                                                elif stc.function.name == "Bash":
+                                                    sub_result = bash(sub_args["command"])
+                                                else:
+                                                    sub_result = f"Error: Tool {stc.function.name} not supported in subagent."
+                                            except Exception as e:
+                                                sub_result = f"Error executing tool: {e}"
+                                            sub_messages.append({"role": "tool", "tool_call_id": stc.id, "content": sub_result})
+                                else:
+                                    # 普通技能，直接返回正文
+                                    result = skill.body
                             else:
-                                print(f"DEBUG: 404 not found -> {skill_path}", file=sys.stderr)
                                 result = f"Error: Skill '{skill_name}' does not exist on disk."
                         except Exception as e:
                             result = f"Error: Failed to load skill '{skill_name}'. Detail: {e}"
