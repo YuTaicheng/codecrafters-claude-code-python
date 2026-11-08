@@ -5,10 +5,11 @@ import sys
 import re
 import subprocess
 import yamlium
+from pathlib import Path
 from dataclasses import dataclass
 from openai import OpenAI
 
-# 导入题目提供的 LSP 客户端
+# 导入官方提供的 LSP 客户端
 from app.lsp_client import LSPClient
 
 
@@ -44,7 +45,6 @@ class Skill:
 API_KEY = os.getenv("OPENROUTER_API_KEY")
 BASE_URL = os.getenv("OPENROUTER_BASE_URL", default="https://openrouter.ai/api/v1")
 
-print(f"DEBUG:KEY {API_KEY} URL {BASE_URL}",file = sys.stderr)
 
 def build_skills_prompt(root: str = ".claude/skills") -> str:
     skills = []
@@ -230,7 +230,7 @@ def main():
                         "character": {
                             "type": "integer",
                             "minimum": 1,
-                            "description": "1-based character offset in UTF-16 code units (same as character count for ASCII)."
+                            "description": "1-based character offset in UTF-16 code units."
                         }
                     },
                     "required": ["operation", "filePath", "line", "character"]
@@ -343,8 +343,55 @@ def main():
                         except Exception as e:
                             result = f"Error: Failed to load skill '{skill_name}'. Detail: {e}"
                 elif tc.function.name == "LSP":
-                    # 3. 占位符返回
-                    result = "LSP is not implemented yet"
+                    file_path = args_dict.get("filePath")
+                    line = int(args_dict.get("line", 1))
+                    character = int(args_dict.get("character", 1))
+                    
+                    if args_dict.get("operation") == "goToDefinition" and lsp_client:
+                        try:
+                            abs_path = Path(file_path).resolve()
+                            uri = abs_path.as_uri()
+                            
+                            # 1. 发送 didOpen
+                            if abs_path.exists():
+                                content = abs_path.read_text(encoding="utf-8")
+                                ext = abs_path.suffix
+                                lang_id = lsp_client.extension_to_language.get(ext, "python")
+                                
+                                lsp_client.notify("textDocument/didOpen", {
+                                    "textDocument": {
+                                        "uri": uri,
+                                        "languageId": lang_id,
+                                        "version": 1,
+                                        "text": content
+                                    }
+                                })
+                            
+                            # 2. 发送 definition 请求（行列号减 1）
+                            res = lsp_client.request("textDocument/definition", {
+                                "textDocument": {"uri": uri},
+                                "position": {"line": line - 1, "character": character - 1}
+                            })
+                            
+                            # 3. 解析结果
+                            if not res:
+                                result = "No definition found."
+                            else:
+                                loc = res[0] if isinstance(res, list) else res
+                                
+                                res_uri = loc["uri"]
+                                res_abs_path = Path(res_uri.replace("file://", ""))
+                                rel_path = os.path.relpath(res_abs_path, Path.cwd())
+                                
+                                start = loc["range"]["start"]
+                                out_line = start["line"] + 1
+                                out_char = start["character"] + 1
+                                
+                                result = f"Defined in {rel_path}:{out_line}:{out_char}"
+                        except Exception as e:
+                            result = f"Error executing LSP: {e}"
+                    else:
+                        result = "LSP is not implemented yet or unconfigured."
                 else:
                     result = f"Error: Unknown tool {tc.function.name}"
             except Exception as e:
