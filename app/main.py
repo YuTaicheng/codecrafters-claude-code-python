@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from collections import defaultdict
 from openai import OpenAI
 
-# 导入官方提供的 LSP 客户端
 from app.lsp_client import LSPClient
 
 
@@ -29,7 +28,6 @@ class Skill:
             meta, body = yamlium.read_markdown(f.read())
             if not meta:
                 raise ValueError(f"{path}: meta 为空")
-            
             try:
                 meta_dict = dict(meta)
                 name = str(meta_dict.get("name", "")).strip()
@@ -37,25 +35,53 @@ class Skill:
                 ctx = str(meta_dict.get("context", "")).strip()
             except Exception as e:
                 raise ValueError(f"{path}: 转换 meta 失败 {e}")
-                
             if not name or not desc:
                 raise ValueError(f"{path}: 缺少 name/description")
-                
             return cls(name, desc, body.lstrip("\n"), os.path.dirname(path), ctx)
 
 
 API_KEY = os.getenv("OPENROUTER_API_KEY")
 BASE_URL = os.getenv("OPENROUTER_BASE_URL", default="https://openrouter.ai/api/v1")
 
-# 全局记录已经发送过 didOpen 的文件 URI，防止重复发送被服务器拒绝
-OPENED_URIS = set()
+# 全局状态：记录每个文件的当前版本和是否打开
+# 格式: { "file:///app/checkout.py": 1 }
+DOC_STATES = {}
+
+def sync_lsp_document(lsp_client, abs_path: Path):
+    """确保文件的内容是最新的，并同步给 LSP 服务器"""
+    if not lsp_client or not abs_path.exists():
+        return
+        
+    uri = abs_path.as_uri()
+    text = abs_path.read_text(encoding="utf-8")
+    ext = abs_path.suffix
+    
+    if uri in DOC_STATES:
+        # 文件已打开，发送 didChange，版本号 + 1
+        new_version = DOC_STATES[uri] + 1
+        lsp_client.notify("textDocument/didChange", {
+            "textDocument": {"uri": uri, "version": new_version},
+            "contentChanges": [{"text": text}]
+        })
+        DOC_STATES[uri] = new_version
+    else:
+        # 文件未打开，发送 didOpen，版本号 1
+        lang_id = lsp_client.extension_to_language.get(ext, "python")
+        lsp_client.notify("textDocument/didOpen", {
+            "textDocument": {
+                "uri": uri,
+                "languageId": lang_id,
+                "version": 1,
+                "text": text
+            }
+        })
+        DOC_STATES[uri] = 1
 
 
 def build_skills_prompt(root: str = ".claude/skills") -> str:
     skills = []
     if not os.path.isdir(root):
         return "You have no additional skills available."
-        
     for entry in sorted(os.listdir(root)):
         folder = os.path.join(root, entry)
         if not os.path.isdir(folder):
@@ -66,7 +92,6 @@ def build_skills_prompt(root: str = ".claude/skills") -> str:
                 skills.append(Skill.from_file(skill_file))
             except Exception:
                 continue
-                
     if skills:
         lines = [f"- {s.name}: {s.description}" for s in skills]
         base = "You have access to the following skills:\n" + "\n".join(lines)
@@ -78,11 +103,9 @@ def build_skills_prompt(root: str = ".claude/skills") -> str:
 def build_user_prompts(raw_input: str) -> list[str]:
     if not raw_input.startswith("/"):
         return [raw_input]
-
     tokens = raw_input.split()
     skill_names = []
     arg_idx = len(tokens)
-
     for i, token in enumerate(tokens):
         if token.startswith("/"):
             skill_name = token[1:]
@@ -91,28 +114,23 @@ def build_user_prompts(raw_input: str) -> list[str]:
                 continue
         arg_idx = i
         break
-
     if not skill_names:
         return [raw_input]
-
     raw_args = " ".join(tokens[arg_idx:])
     args_list = raw_args.split()
     results = []
-
     for name in skill_names:
         try:
             body = Skill.from_file(os.path.join(".claude/skills", name, "SKILL.md")).body
             env = {"$ARGUMENTS": raw_args}
             for i, arg in enumerate(args_list):
                 env[f"${i}"] = env[f"$ARGUMENTS[{i}]"] = arg
-            
             processed_body = re.sub(r'\$(?:ARGUMENTS(?:\[\d+\])?|\d+)', lambda m: env.get(m.group(), ""), body)
             header = f"Skill: {name} (located at .claude/skills/{name})\nPaths in the instructions below are relative to that folder."
             injected = f"{header}\n\n{processed_body}"
             results.append(injected)
         except Exception as e:
             print(f"DEBUG: parse error in {name} -> {e}", file=sys.stderr)
-            
     return results if results else [raw_input]
 
 
@@ -139,72 +157,18 @@ def main():
         print("LSP client connected", file=sys.stderr)
 
     client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
-    
     skills_ad = build_skills_prompt()
     messages = [{"role": "system", "content": skills_ad}]
     
     for prompt in build_user_prompts(args.p):
         messages.append({"role": "user", "content": prompt})
 
+    # ... tools 定义省略 ...
     tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "Read",
-                "description": "Read and return the contents of a file",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "file_path": {"type": "string", "description": "The path to the file to read"}
-                    },
-                    "required": ["file_path"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "Write",
-                "description": "Write content to a specified file, will overwrite existing content if the file already exists",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "file_path": {"type": "string", "description": "The path of the target file to write content to"},
-                        "content": {"type": "string", "description": "The content that needs to be written into the target file"}
-                    },
-                    "required": ["file_path", "content"],
-                },
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "Bash",
-                "description": "Execute a shell command",
-                "parameters": {
-                    "type": "object",
-                    "required": ["command"],
-                    "properties": {
-                        "command": {"type": "string", "description": "The command to execute"}
-                    }
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "Skill",
-                "description": "Load a skill's instructions into the conversation",
-                "parameters": {
-                    "type": "object",
-                    "required": ["name"],
-                    "properties": {
-                        "name": {"type": "string", "description": "The name of the skill to use"},
-                        "args": {"type": "string", "description": "Optional arguments for the skill"}
-                    }
-                }
-            }
-        }
+        {"type": "function", "function": {"name": "Read", "description": "Read file", "parameters": {"type": "object", "properties": {"file_path": {"type": "string"}}, "required": ["file_path"]}}},
+        {"type": "function", "function": {"name": "Write", "description": "Write file", "parameters": {"type": "object", "properties": {"file_path": {"type": "string"}, "content": {"type": "string"}}, "required": ["file_path", "content"]}}},
+        {"type": "function", "function": {"name": "Bash", "description": "Run command", "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}},
+        {"type": "function", "function": {"name": "Skill", "description": "Load skill", "parameters": {"type": "object", "properties": {"name": {"type": "string"}, "args": {"type": "string"}}, "required": ["name"]}}}
     ]
 
     if lsp_client:
@@ -216,24 +180,10 @@ def main():
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "operation": {
-                            "type": "string",
-                            "enum": ["goToDefinition", "findReferences"]
-                        },
-                        "filePath": {
-                            "type": "string",
-                            "description": "Absolute path, or a path relative to the agent's current working directory."
-                        },
-                        "line": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "description": "1-based line number of the symbol."
-                        },
-                        "character": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "description": "1-based character offset in UTF-16 code units."
-                        }
+                        "operation": {"type": "string", "enum": ["goToDefinition", "findReferences"]},
+                        "filePath": {"type": "string", "description": "Absolute path, or a path relative to the agent's current working directory."},
+                        "line": {"type": "integer", "minimum": 1},
+                        "character": {"type": "integer", "minimum": 1}
                     },
                     "required": ["operation", "filePath", "line", "character"]
                 }
@@ -246,27 +196,15 @@ def main():
             messages=messages,
             tools=tools,
         )
-
         if not chat.choices:
             raise RuntimeError("no choices in response")
 
         response = chat.choices[0].message
-        
-        message_dict = {
-            "role": response.role,
-            "content": response.content or "",
-        }
+        message_dict = {"role": response.role, "content": response.content or ""}
         
         if response.tool_calls:
             message_dict["tool_calls"] = [
-                {
-                    "id": tc.id,
-                    "type": tc.type,
-                    "function": {
-                        "name": tc.function.name,
-                        "arguments": tc.function.arguments,
-                    },
-                }
+                {"id": tc.id, "type": tc.type, "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
                 for tc in response.tool_calls
             ]
             
@@ -288,6 +226,12 @@ def main():
                     with open(args_dict["file_path"], "w", encoding="utf-8") as f:
                         f.write(args_dict["content"])
                     result = "OK"
+                    
+                    # 🔥 核心改变：写入成功后，立刻同步给 LSP！
+                    if lsp_client:
+                        abs_path = Path(args_dict["file_path"]).resolve()
+                        sync_lsp_document(lsp_client, abs_path)
+                        
                 elif tc.function.name == "Bash":
                     result = bash(args_dict["command"])
                 elif tc.function.name == "Skill":
@@ -355,21 +299,8 @@ def main():
                             abs_path = Path(file_path).resolve()
                             uri = abs_path.as_uri()
                             
-                            # 确保文件已经通过 didOpen 发送给 LSP 服务器
-                            if abs_path.exists() and uri not in OPENED_URIS:
-                                content = abs_path.read_text(encoding="utf-8")
-                                ext = abs_path.suffix
-                                lang_id = lsp_client.extension_to_language.get(ext, "python")
-                                
-                                lsp_client.notify("textDocument/didOpen", {
-                                    "textDocument": {
-                                        "uri": uri,
-                                        "languageId": lang_id,
-                                        "version": 1,
-                                        "text": content
-                                    }
-                                })
-                                OPENED_URIS.add(uri)
+                            # 🔥 核心改变：在查询前，先确保文件状态已同步
+                            sync_lsp_document(lsp_client, abs_path)
                             
                             if operation == "goToDefinition":
                                 res = lsp_client.request("textDocument/definition", {
