@@ -176,6 +176,7 @@ def fetch_lsp_diagnostics(lsp_client) -> str:
         return ""
     return f"\n\n<new-diagnostics>\nThe following new diagnostic issues were detected:\n\n{'\n\n'.join(report)}\n</new-diagnostics>"
 
+
 # ==========================================
 # 4. 各个工具的执行函数
 # ==========================================
@@ -190,7 +191,7 @@ def tool_write(args: dict, lsp_client) -> str:
     if lsp_client:
         abs_path = Path(args["file_path"]).resolve()
         sync_lsp_document(lsp_client, abs_path)
-        time.sleep(0.5) # 给 LSP 反应时间
+        time.sleep(0.5)
         result += fetch_lsp_diagnostics(lsp_client)
     return result
 
@@ -302,7 +303,7 @@ def main():
         for tc in response.tool_calls:
             try:
                 args_dict = json.loads(tc.function.arguments)
-                # 路由分发，现在这里极其干净
+                
                 if tc.function.name == "Read":
                     result = tool_read(args_dict)
                 elif tc.function.name == "Write":
@@ -312,9 +313,63 @@ def main():
                 elif tc.function.name == "LSP":
                     result = tool_lsp(args_dict, lsp_client)
                 elif tc.function.name == "Skill":
-                    # 简化处理，直接返回 body
-                    skill = Skill.from_file(os.path.join(".claude/skills", str(args_dict.get("name","")).strip(), "SKILL.md"))
-                    result = skill.body
+                    skill_name = str(args_dict.get("name", "")).strip()
+                    if not skill_name:
+                        result = "Error: Missing or empty 'name' parameter."
+                    else:
+                        try:
+                            skill_path = os.path.join(".claude/skills", skill_name, "SKILL.md")
+                            if os.path.isfile(skill_path):
+                                skill = Skill.from_file(skill_path)
+                                
+                                # 🔥 Subagent (fork) 核心逻辑
+                                if str(skill.context).strip().lower() == "fork":
+                                    sub_messages = [{"role": "user", "content": str(skill.body)}]
+                                    sub_tools = [t for t in tools if t["function"]["name"] != "Skill"]
+                                    
+                                    while True:
+                                        sub_chat = client.chat.completions.create(
+                                            model=MODEL,
+                                            messages=sub_messages,
+                                            tools=sub_tools,
+                                        )
+                                        sub_resp = sub_chat.choices[0].message
+                                        sub_msg_dict = {"role": "assistant", "content": sub_resp.content or ""}
+                                        
+                                        if sub_resp.tool_calls:
+                                            sub_msg_dict["tool_calls"] = [
+                                                {"id": stc.id, "type": stc.type, "function": {"name": stc.function.name, "arguments": stc.function.arguments}}
+                                                for stc in sub_resp.tool_calls
+                                            ]
+                                        sub_messages.append(sub_msg_dict)
+                                        
+                                        if not sub_resp.tool_calls:
+                                            result = sub_resp.content
+                                            break
+                                            
+                                        for stc in sub_resp.tool_calls:
+                                            sub_result = ""
+                                            try:
+                                                sub_args = json.loads(stc.function.arguments)
+                                                if stc.function.name == "Read":
+                                                    sub_result = tool_read(sub_args)
+                                                elif stc.function.name == "Write":
+                                                    sub_result = tool_write(sub_args, lsp_client)
+                                                elif stc.function.name == "Bash":
+                                                    sub_result = tool_bash(sub_args)
+                                                elif stc.function.name == "LSP":
+                                                    sub_result = tool_lsp(sub_args, lsp_client)
+                                                else:
+                                                    sub_result = f"Error: Tool {stc.function.name} not supported in subagent."
+                                            except Exception as e:
+                                                sub_result = f"Error executing tool: {e}"
+                                            sub_messages.append({"role": "tool", "tool_call_id": stc.id, "content": sub_result})
+                                else:
+                                    result = skill.body
+                            else:
+                                result = f"Error: Skill '{skill_name}' does not exist on disk."
+                        except Exception as e:
+                            result = f"Error: Failed to load skill '{skill_name}'. Detail: {e}"
                 else:
                     result = f"Unknown tool {tc.function.name}"
             except Exception as e:
