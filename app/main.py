@@ -6,7 +6,9 @@ import re
 import subprocess
 import yamlium
 from pathlib import Path
+from urllib.parse import unquote
 from dataclasses import dataclass
+from collections import defaultdict
 from openai import OpenAI
 
 # 导入官方提供的 LSP 客户端
@@ -44,6 +46,9 @@ class Skill:
 
 API_KEY = os.getenv("OPENROUTER_API_KEY")
 BASE_URL = os.getenv("OPENROUTER_BASE_URL", default="https://openrouter.ai/api/v1")
+
+# 全局记录已经发送过 didOpen 的文件 URI，防止重复发送被服务器拒绝
+OPENED_URIS = set()
 
 
 def build_skills_prompt(root: str = ".claude/skills") -> str:
@@ -129,7 +134,6 @@ def main():
     if not API_KEY:
         raise RuntimeError("OPENROUTER_API_KEY is not set")
 
-    # 1. 初始化 LSP 客户端
     lsp_client = LSPClient.from_environment()
     if lsp_client:
         print("LSP client connected", file=sys.stderr)
@@ -142,7 +146,6 @@ def main():
     for prompt in build_user_prompts(args.p):
         messages.append({"role": "user", "content": prompt})
 
-    # 基础工具定义
     tools = [
         {
             "type": "function",
@@ -204,19 +207,18 @@ def main():
         }
     ]
 
-    # 2. 如果 LSP 已连接，广告 LSP 工具
     if lsp_client:
         tools.append({
             "type": "function",
             "function": {
                 "name": "LSP",
-                "description": "Returns the file, line, and character where a symbol is defined.",
+                "description": "Returns the file, line, and character where a symbol is defined or referenced.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "operation": {
                             "type": "string",
-                            "enum": ["goToDefinition"]
+                            "enum": ["goToDefinition", "findReferences"]
                         },
                         "filePath": {
                             "type": "string",
@@ -343,17 +345,18 @@ def main():
                         except Exception as e:
                             result = f"Error: Failed to load skill '{skill_name}'. Detail: {e}"
                 elif tc.function.name == "LSP":
+                    operation = args_dict.get("operation")
                     file_path = args_dict.get("filePath")
                     line = int(args_dict.get("line", 1))
                     character = int(args_dict.get("character", 1))
                     
-                    if args_dict.get("operation") == "goToDefinition" and lsp_client:
+                    if lsp_client:
                         try:
                             abs_path = Path(file_path).resolve()
                             uri = abs_path.as_uri()
                             
-                            # 1. 发送 didOpen
-                            if abs_path.exists():
+                            # 确保文件已经通过 didOpen 发送给 LSP 服务器
+                            if abs_path.exists() and uri not in OPENED_URIS:
                                 content = abs_path.read_text(encoding="utf-8")
                                 ext = abs_path.suffix
                                 lang_id = lsp_client.extension_to_language.get(ext, "python")
@@ -366,28 +369,54 @@ def main():
                                         "text": content
                                     }
                                 })
+                                OPENED_URIS.add(uri)
                             
-                            # 2. 发送 definition 请求（行列号减 1）
-                            res = lsp_client.request("textDocument/definition", {
-                                "textDocument": {"uri": uri},
-                                "position": {"line": line - 1, "character": character - 1}
-                            })
-                            
-                            # 3. 解析结果
-                            if not res:
-                                result = "No definition found."
+                            if operation == "goToDefinition":
+                                res = lsp_client.request("textDocument/definition", {
+                                    "textDocument": {"uri": uri},
+                                    "position": {"line": line - 1, "character": character - 1}
+                                })
+                                if not res:
+                                    result = "No definition found."
+                                else:
+                                    loc = res[0] if isinstance(res, list) else res
+                                    res_uri = loc["uri"]
+                                    res_abs_path = Path(unquote(res_uri.replace("file://", "")))
+                                    rel_path = os.path.relpath(res_abs_path, Path.cwd())
+                                    start = loc["range"]["start"]
+                                    out_line = start["line"] + 1
+                                    out_char = start["character"] + 1
+                                    result = f"Defined in {rel_path}:{out_line}:{out_char}"
+                                    
+                            elif operation == "findReferences":
+                                res = lsp_client.request("textDocument/references", {
+                                    "textDocument": {"uri": uri},
+                                    "position": {"line": line - 1, "character": character - 1},
+                                    "context": {"includeDeclaration": True}
+                                })
+                                if not res:
+                                    result = "No references found."
+                                else:
+                                    grouped = defaultdict(set)
+                                    for loc in res:
+                                        res_uri = loc["uri"]
+                                        res_abs_path = Path(unquote(res_uri.replace("file://", "")))
+                                        rel_path = os.path.relpath(res_abs_path, Path.cwd())
+                                        start = loc["range"]["start"]
+                                        grouped[rel_path].add((start["line"] + 1, start["character"] + 1))
+
+                                    num_files = len(grouped)
+                                    num_refs = sum(len(locs) for locs in grouped.values())
+                                    
+                                    lines = [f"Found {num_refs} references across {num_files} files:"]
+                                    for file, locs in grouped.items():
+                                        lines.append(f"\n{file}:")
+                                        for l, c in sorted(locs):
+                                            lines.append(f"  Line {l}:{c}")
+                                    result = "\n".join(lines)
                             else:
-                                loc = res[0] if isinstance(res, list) else res
+                                result = f"Error: Unknown LSP operation '{operation}'."
                                 
-                                res_uri = loc["uri"]
-                                res_abs_path = Path(res_uri.replace("file://", ""))
-                                rel_path = os.path.relpath(res_abs_path, Path.cwd())
-                                
-                                start = loc["range"]["start"]
-                                out_line = start["line"] + 1
-                                out_char = start["character"] + 1
-                                
-                                result = f"Defined in {rel_path}:{out_line}:{out_char}"
                         except Exception as e:
                             result = f"Error executing LSP: {e}"
                     else:
